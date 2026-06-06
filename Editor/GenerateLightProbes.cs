@@ -17,6 +17,20 @@ public class GenerateLightProbes : EditorWindow
     Resolution resolution = Resolution.Medium;
     string groupName = "Light Probe Group";
     bool deleteExisting = true;
+    float offset = 0.5f;
+    float probeRadius = 0.2f;
+
+    // Reference-based exclusion
+    enum ExcludeMode { Lower, Upper }
+
+    [System.Serializable]
+    class ExcludeEntry
+    {
+        public GameObject target;
+        public ExcludeMode mode = ExcludeMode.Lower;
+    }
+
+    List<ExcludeEntry> excludeEntries = new List<ExcludeEntry>();
 
     void OnGUI()
     {
@@ -28,11 +42,42 @@ public class GenerateLightProbes : EditorWindow
         resolution = (Resolution)EditorGUILayout.EnumPopup("Resolution", resolution);
 
         EditorGUILayout.Space();
+        EditorGUILayout.LabelField("Reference Exclusions", EditorStyles.boldLabel);
+
+        for (int i = 0; i < excludeEntries.Count; i++)
+        {
+            EditorGUILayout.BeginHorizontal();
+            excludeEntries[i].target = (GameObject)EditorGUILayout.ObjectField(excludeEntries[i].target, typeof(GameObject), true);
+            excludeEntries[i].mode = (ExcludeMode)EditorGUILayout.EnumPopup(excludeEntries[i].mode, GUILayout.Width(70));
+            if (GUILayout.Button("X", GUILayout.Width(22)))
+            {
+                excludeEntries.RemoveAt(i);
+                i--;
+            }
+            EditorGUILayout.EndHorizontal();
+        }
+
+        if (GUILayout.Button("+ Add Exclusion"))
+            excludeEntries.Add(new ExcludeEntry());
+
+        EditorGUILayout.HelpBox(
+            "Lower = exclude probes inside X/Z footprint that are BELOW the object.\n" +
+            "Upper = exclude probes inside X/Z footprint that are ABOVE the object.",
+            MessageType.Info);
+
+        EditorGUILayout.Space();
+        EditorGUILayout.LabelField("Probe Settings", EditorStyles.boldLabel);
+        offset = EditorGUILayout.FloatField("Offset from Bounds", offset);
+        probeRadius = EditorGUILayout.FloatField("Collider Check Radius", probeRadius);
+
+        EditorGUILayout.Space();
         EditorGUILayout.HelpBox(
             "Low      – bounds.max only\n" +
             "Medium   – bounds.max + bounds.min\n" +
             "High     – bounds + 2× lerped random probes\n" +
-            "Very High – bounds + 4× lerped random probes",
+            "Very High – bounds + 4× lerped random probes\n\n" +
+            "Offset pushes probes outward from bounds.\n" +
+            "Probes inside colliders are removed automatically.",
             MessageType.Info);
 
         EditorGUILayout.Space();
@@ -41,7 +86,9 @@ public class GenerateLightProbes : EditorWindow
             Generate();
     }
 
-    static void Generate(Resolution resolution, string groupName, bool deleteExisting)
+    static void Generate(Resolution resolution, string groupName, bool deleteExisting,
+        float offset, float probeRadius,
+        List<ExcludeEntry> excludeEntries)
     {
         var probeLocations = new List<Vector3>();
 
@@ -57,13 +104,46 @@ public class GenerateLightProbes : EditorWindow
         foreach (var obj in UnityEngine.Object.FindObjectsOfType<GameObject>())
         {
             if (!obj.isStatic) continue;
+
             var renderer = obj.GetComponent<Renderer>();
             if (renderer == null) continue;
 
-            probeLocations.Add(renderer.bounds.max);
+            Bounds b = renderer.bounds;
+
+            // Reference-based exclusions: iterate the list
+            bool excluded = false;
+            foreach (var entry in excludeEntries)
+            {
+                if (entry.target == null) continue;
+                Bounds rb = entry.target.GetComponent<Renderer>() != null
+                    ? entry.target.GetComponent<Renderer>().bounds
+                    : new Bounds(entry.target.transform.position, Vector3.one);
+
+                bool insideXZ = b.center.x >= rb.min.x && b.center.x <= rb.max.x &&
+                                b.center.z >= rb.min.z && b.center.z <= rb.max.z;
+
+                if (!insideXZ) continue;
+
+                if (entry.mode == ExcludeMode.Lower && b.max.y < rb.max.y)
+                    { excluded = true; break; }
+
+                if (entry.mode == ExcludeMode.Upper && b.min.y > rb.min.y)
+                    { excluded = true; break; }
+            }
+            if (excluded) continue;
+
+            Vector3 center = b.center;
+            Vector3 extents = b.extents + Vector3.one * offset;
+
+            // Add offset-pushed corners: max and min along all axes
+            probeLocations.Add(center + new Vector3( extents.x,  extents.y,  extents.z));
+            probeLocations.Add(center + new Vector3(-extents.x, -extents.y, -extents.z));
 
             if (resolution != Resolution.Low)
-                probeLocations.Add(renderer.bounds.min);
+            {
+                probeLocations.Add(center + new Vector3(-extents.x,  extents.y,  extents.z));
+                probeLocations.Add(center + new Vector3( extents.x, -extents.y, -extents.z));
+            }
         }
 
         // Add interpolated probes for high / very high
@@ -87,6 +167,13 @@ public class GenerateLightProbes : EditorWindow
             }
         }
 
+        // Remove any probes that land inside colliders
+        for (int i = probeLocations.Count - 1; i >= 0; i--)
+        {
+            if (Physics.CheckSphere(probeLocations[i], probeRadius))
+                probeLocations.RemoveAt(i);
+        }
+
         // Create the group
         var go = new GameObject(groupName);
         var lpg = go.AddComponent<LightProbeGroup>();
@@ -98,6 +185,7 @@ public class GenerateLightProbes : EditorWindow
     // Convenience wrapper used by the Generate button
     void Generate()
     {
-        Generate(resolution, groupName, deleteExisting);
+        Generate(resolution, groupName, deleteExisting, offset, probeRadius,
+            excludeEntries);
     }
 }
