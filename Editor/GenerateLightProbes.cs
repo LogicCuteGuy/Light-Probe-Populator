@@ -167,12 +167,50 @@ public class GenerateLightProbes : EditorWindow
             }
         }
 
-        // Remove any probes that land inside colliders
+        // Gather all terrains in the scene for underground detection
+        var terrains = UnityEngine.Object.FindObjectsOfType<Terrain>();
+        int removedByCollider = 0;
+        int removedByTerrain = 0;
+
+        // Remove any probes that land inside colliders or underneath terrain
         for (int i = probeLocations.Count - 1; i >= 0; i--)
         {
-            if (Physics.CheckSphere(probeLocations[i], probeRadius))
+            Vector3 pos = probeLocations[i];
+            bool remove = false;
+
+            // Check colliders (including triggers — catches mesh colliders too)
+            if (Physics.CheckSphere(pos, probeRadius, ~0, QueryTriggerInteraction.Collide))
+            {
+                remove = true;
+                removedByCollider++;
+            }
+
+            // Check if probe is below any terrain surface
+            if (!remove)
+            {
+                foreach (var terrain in terrains)
+                {
+                    TerrainCollider tc = terrain.GetComponent<TerrainCollider>();
+                    if (tc == null) continue;
+
+                    // Raycast upward from probe — if it hits terrain, probe is underground
+                    if (Physics.Raycast(pos, Vector3.up, out RaycastHit hit, 1000f))
+                    {
+                        if (hit.collider == tc)
+                        {
+                            remove = true;
+                            removedByTerrain++;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (remove)
                 probeLocations.RemoveAt(i);
         }
+
+        Debug.Log($"[Light Probe Populator] Removed {removedByCollider} probes inside colliders, {removedByTerrain} probes under terrain");
 
         // Create the group
         var go = new GameObject(groupName);
