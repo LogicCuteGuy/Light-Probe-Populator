@@ -77,7 +77,7 @@ public class GenerateLightProbes : EditorWindow
             "High     – bounds + 2× lerped random probes\n" +
             "Very High – bounds + 4× lerped random probes\n\n" +
             "Offset pushes probes outward from bounds.\n" +
-            "Probes inside colliders are removed automatically.",
+            "Probes inside colliders/terrain are moved to floor height.",
             MessageType.Info);
 
         EditorGUILayout.Space();
@@ -169,48 +169,47 @@ public class GenerateLightProbes : EditorWindow
 
         // Gather all terrains in the scene for underground detection
         var terrains = UnityEngine.Object.FindObjectsOfType<Terrain>();
-        int removedByCollider = 0;
-        int removedByTerrain = 0;
+        int repositionedByCollider = 0;
+        int repositionedByTerrain = 0;
 
-        // Remove any probes that land inside colliders or underneath terrain
-        for (int i = probeLocations.Count - 1; i >= 0; i--)
+        // Reposition probes that land inside colliders or underneath terrain
+        for (int i = 0; i < probeLocations.Count; i++)
         {
             Vector3 pos = probeLocations[i];
-            bool remove = false;
 
-            // Check colliders (including triggers — catches mesh colliders too)
-            if (Physics.CheckSphere(pos, probeRadius, ~0, QueryTriggerInteraction.Collide))
+            // Check non-trigger colliders
+            if (Physics.CheckSphere(pos, probeRadius, ~0, QueryTriggerInteraction.Ignore))
             {
-                remove = true;
-                removedByCollider++;
+                // Raycast down to find the floor beneath the probe
+                if (Physics.Raycast(pos, Vector3.down, out RaycastHit hit, 1000f, ~0, QueryTriggerInteraction.Ignore))
+                {
+                    probeLocations[i] = new Vector3(pos.x, hit.point.y, pos.z);
+                    repositionedByCollider++;
+                }
+                continue;
             }
 
             // Check if probe is below any terrain surface
-            if (!remove)
+            foreach (var terrain in terrains)
             {
-                foreach (var terrain in terrains)
-                {
-                    TerrainCollider tc = terrain.GetComponent<TerrainCollider>();
-                    if (tc == null) continue;
+                TerrainCollider tc = terrain.GetComponent<TerrainCollider>();
+                if (tc == null) continue;
 
-                    // Raycast upward from probe — if it hits terrain, probe is underground
-                    if (Physics.Raycast(pos, Vector3.up, out RaycastHit hit, 1000f))
+                // Raycast up — if it hits terrain, probe is underground
+                if (Physics.Raycast(pos, Vector3.up, out RaycastHit tHit, 1000f, ~0, QueryTriggerInteraction.Ignore))
+                {
+                    if (tHit.collider == tc)
                     {
-                        if (hit.collider == tc)
-                        {
-                            remove = true;
-                            removedByTerrain++;
-                            break;
-                        }
+                        // Move probe to terrain surface
+                        probeLocations[i] = new Vector3(pos.x, tHit.point.y, pos.z);
+                        repositionedByTerrain++;
+                        break;
                     }
                 }
             }
-
-            if (remove)
-                probeLocations.RemoveAt(i);
         }
 
-        Debug.Log($"[Light Probe Populator] Removed {removedByCollider} probes inside colliders, {removedByTerrain} probes under terrain");
+        Debug.Log($"[Light Probe Populator] Repositioned {repositionedByCollider} probes from colliders, {repositionedByTerrain} probes from terrain to floor height");
 
         // Create the group
         var go = new GameObject(groupName);
