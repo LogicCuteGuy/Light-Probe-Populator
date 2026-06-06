@@ -17,14 +17,25 @@ If you're more familiar with Unreal Engine, this package is roughly what the Lig
 ### Install process
 This is a plugin that makes use of Unity's new *Package Manager* feature. Just drop the *com.alexismorin.lightprobepopulator* folder into your *packages* folder (found at the same level as your Assets folder) and it should work out-of-the-box. If you're using an older version of Unity, navigate inside the *com.alexismorin.lightprobepopulator* folder and then just drag the *Editor* folder you find there anywhere in your project hierarchy.
 
-![footer](images/options.png)
-
 ### Usage
-Just select one of the four options in the *Tools* menu item.
- - *Low Resolution* is best suited for stylized or mobile games
- - *Medium Resolution* is good for PC or Console
- - *High Resolution* is good if you're doing realtime rendering.
- - *Very High Resolution* is kind of overkill - use if you're trying to compete with the Unity demo team.
+Open the popup window via **Tools > Light Probe Populator** or use the quick-access menu shortcuts under **Tools > Generate Light Probe Groups**.
+
+#### Resolution Levels
+ - *Low* – probes at bounds.max only, best suited for stylized or mobile games
+ - *Medium* – probes at bounds.max + bounds.min, good for PC or Console
+ - *High* – bounds + 2× lerped random probes, good for realtime rendering
+ - *Very High* – bounds + 4× lerped random probes, overkill unless you're competing with the Unity demo team
+
+#### Reference Exclusions
+Add exclusion rules to skip probe generation in unwanted areas. Each rule has:
+- **Object** – drag any GameObject (Terrain, MeshCollider, MeshRenderer, etc.)
+- **Mode** – `Lower` removes probes below the object, `Upper` removes probes above the object (matched by X/Z footprint)
+
+Click **+ Add Exclusion** to create as many rules as you need.
+
+#### Probe Settings
+- **Offset from Bounds** – pushes probes outward from renderer bounds so they sit outside meshes
+- **Collider Check Radius** – any probe that lands inside a collider within this radius is removed automatically
 
 ![footer](images/footer.png)
 
