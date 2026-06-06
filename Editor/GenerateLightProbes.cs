@@ -21,13 +21,13 @@ public class GenerateLightProbes : EditorWindow
     float probeRadius = 0.2f;
 
     // Reference-based exclusion
-    enum ExcludeMode { Lower, Upper }
+    enum ExcludeMode { Below, Above }
 
     [System.Serializable]
     class ExcludeEntry
     {
         public GameObject target;
-        public ExcludeMode mode = ExcludeMode.Lower;
+        public ExcludeMode mode = ExcludeMode.Below;
     }
 
     List<ExcludeEntry> excludeEntries = new List<ExcludeEntry>();
@@ -61,8 +61,8 @@ public class GenerateLightProbes : EditorWindow
             excludeEntries.Add(new ExcludeEntry());
 
         EditorGUILayout.HelpBox(
-            "Lower = exclude probes inside X/Z footprint that are BELOW the object.\n" +
-            "Upper = exclude probes inside X/Z footprint that are ABOVE the object.",
+            "Below = exclude objects UNDER the target.\n" +
+            "Above = exclude objects ON TOP of the target.",
             MessageType.Info);
 
         EditorGUILayout.Space();
@@ -119,15 +119,16 @@ public class GenerateLightProbes : EditorWindow
                     ? entry.target.GetComponent<Renderer>().bounds
                     : new Bounds(entry.target.transform.position, Vector3.one);
 
-                bool insideXZ = b.center.x >= rb.min.x && b.center.x <= rb.max.x &&
-                                b.center.z >= rb.min.z && b.center.z <= rb.max.z;
+                // Check if object overlaps target on X/Z axis
+                bool overlapXZ = b.min.x < rb.max.x && b.max.x > rb.min.x &&
+                                 b.min.z < rb.max.z && b.max.z > rb.min.z;
 
-                if (!insideXZ) continue;
+                if (!overlapXZ) continue;
 
-                if (entry.mode == ExcludeMode.Lower && b.max.y < rb.max.y)
+                if (entry.mode == ExcludeMode.Below && b.max.y < rb.min.y)
                     { excluded = true; break; }
 
-                if (entry.mode == ExcludeMode.Upper && b.min.y > rb.min.y)
+                if (entry.mode == ExcludeMode.Above && b.min.y > rb.max.y)
                     { excluded = true; break; }
             }
             if (excluded) continue;
@@ -169,47 +170,56 @@ public class GenerateLightProbes : EditorWindow
 
         // Gather all terrains in the scene for underground detection
         var terrains = UnityEngine.Object.FindObjectsOfType<Terrain>();
-        int repositionedByCollider = 0;
-        int repositionedByTerrain = 0;
+        int repositioned = 0;
+        float surfaceOffset = 0.1f; // small offset above detected surface
 
-        // Reposition probes that land inside colliders or underneath terrain
+        // Push probes upward until they are above all colliders/terrain
         for (int i = 0; i < probeLocations.Count; i++)
         {
             Vector3 pos = probeLocations[i];
+            bool inside = true;
+            int safety = 0;
 
-            // Check non-trigger colliders
-            if (Physics.CheckSphere(pos, probeRadius, ~0, QueryTriggerInteraction.Ignore))
+            // Keep moving probe up until it's clear of all colliders and terrain
+            while (inside && safety < 100)
             {
-                // Raycast down to find the floor beneath the probe
-                if (Physics.Raycast(pos, Vector3.down, out RaycastHit hit, 1000f, ~0, QueryTriggerInteraction.Ignore))
+                inside = false;
+
+                // Check non-trigger colliders
+                if (Physics.CheckSphere(pos, probeRadius, ~0, QueryTriggerInteraction.Ignore))
                 {
-                    probeLocations[i] = new Vector3(pos.x, hit.point.y, pos.z);
-                    repositionedByCollider++;
+                    pos += Vector3.up * surfaceOffset;
+                    inside = true;
                 }
-                continue;
-            }
 
-            // Check if probe is below any terrain surface
-            foreach (var terrain in terrains)
-            {
-                TerrainCollider tc = terrain.GetComponent<TerrainCollider>();
-                if (tc == null) continue;
-
-                // Raycast up — if it hits terrain, probe is underground
-                if (Physics.Raycast(pos, Vector3.up, out RaycastHit tHit, 1000f, ~0, QueryTriggerInteraction.Ignore))
+                // Check terrain — raycast up, if terrain is above the probe, push up
+                if (!inside)
                 {
-                    if (tHit.collider == tc)
+                    foreach (var terrain in terrains)
                     {
-                        // Move probe to terrain surface
-                        probeLocations[i] = new Vector3(pos.x, tHit.point.y, pos.z);
-                        repositionedByTerrain++;
-                        break;
+                        TerrainCollider tc = terrain.GetComponent<TerrainCollider>();
+                        if (tc == null) continue;
+
+                        if (Physics.Raycast(pos, Vector3.up, out RaycastHit tHit, 1000f, ~0, QueryTriggerInteraction.Ignore))
+                        {
+                            if (tHit.collider == tc)
+                            {
+                                pos = tHit.point + Vector3.up * surfaceOffset;
+                                inside = true;
+                                break;
+                            }
+                        }
                     }
                 }
+                safety++;
             }
+
+            Vector3 original = probeLocations[i];
+            probeLocations[i] = pos;
+            if (pos.y > original.y) repositioned++;
         }
 
-        Debug.Log($"[Light Probe Populator] Repositioned {repositionedByCollider} probes from colliders, {repositionedByTerrain} probes from terrain to floor height");
+        Debug.Log($"[Light Probe Populator] Repositioned {repositioned} probes upward above colliders/terrain");
 
         // Create the group
         var go = new GameObject(groupName);
